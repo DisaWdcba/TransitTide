@@ -1,0 +1,21 @@
+# MSBuild / Visual Studio
+x64/
+**/x64/
+**/Debug/
+**/Release/
+*.obj
+*.pdb
+*.ilk
+*.user
+*.suo
+.vs/
+
+# build outputs
+*.exe
+capstone.dll
+
+# experiment artifacts
+*.log
+stage.txt
+detector_*.txt
+memmap.txt
