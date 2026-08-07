@@ -74,6 +74,16 @@ A/B 实验（MSVC + MinGW 双工具链 × 4 组合全矩阵都跑过）：
 
 睡眠窗口内用 `VirtualQueryEx` 枚举全进程内存，实测下来**唯一的 RWX 区域就是 `.pay` 那一页**——从加载起就是 RWX，全程零翻转。这是"零 API 自修改"的必然形态，也是后面所有检测面讨论的锚点。
 
+**内容还原（默认 island 模式）——对抗内存区域特征型 EDR。** 针对"映像内非 .text 节 + RWX 页 + 明文内容反汇编出 shellcode"这类检测（实测告警：`abnormalstackjson` 直接抓到 `.pay` 页里的 shellcode 字节），睡眠时不再只加密前缀，而是把 `.pay` **整体还原成磁盘原始内容**（stomp 前保存的 StompTarget 镜像，30 个 call 的正常函数形态），唤醒后再重新 stomp 回去：
+
+```
+睡眠前：memcpy(.pay, g_pristinePay)    ← 页内容 == 磁盘内容（func_bin/反汇编特征消失）
+睡眠中：image-vs-disk 比对通过          ← hollows_hunter 那列的"理论必输"翻转为实测通过
+唤醒后：memcpy(.pay, g_shellcodeCopy)  ← 恢复 shellcode，继续执行
+```
+
+验证（MSVC + MinGW 双工具链）：island 还原模式 Duck Eye 零告警、`restored pristine OK` 自检通过、载荷行为正常；full 控制组（保留 XOR 路径）依旧被检出。代价：RWX 页属性与节位置特征仍在（若 EDR 单独凭 `protect=64` 判定则无效），唤醒窗口（stomp→执行）内容与磁盘不一致（微秒级）。
+
 ## 四、升级威胁模型：Elastic 的 unbacked 语义
 
 Duck Eye 只是个本地扫描器，真实世界的对手是 EDR。于是把 [elastic/protections-artifacts](https://github.com/elastic/protections-artifacts) 拉下来翻了一遍：770 条 Windows 行为规则，254 条引用 `call_stack`，约 100 条涉及 unbacked。

@@ -3,7 +3,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-#include <psapi.h>
+#include <tlhelp32.h>
 
 #pragma comment(lib, "psapi.lib")
 
@@ -23,34 +23,34 @@ static int ReadFileBytes(const wchar_t* path, BYTE** out, DWORD* outLen) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc < 3) {
-        printf("usage: dumpdiff <pid> <section-name>\n");
+        printf("usage: dumpdiff <pid> <section-name> [offset-hex]\n");
         return 1;
     }
     DWORD pid = (DWORD)_wtoi(argv[1]);
     char secName[16] = {0};
     WideCharToMultiByte(CP_ACP, 0, argv[2], -1, secName, sizeof(secName), NULL, NULL);
+    DWORD off = (argc > 3) ? (DWORD)wcstoul(argv[3], NULL, 16) : 0;
 
     HANDLE hProc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
     if (!hProc) { printf("open failed %lu\n", GetLastError()); return 1; }
 
-    HMODULE mods[256];
-    DWORD needed = 0;
-    if (!EnumProcessModulesEx(hProc, mods, sizeof(mods), &needed, LIST_MODULES_ALL)) {
-        printf("enum failed %lu\n", GetLastError());
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snap == INVALID_HANDLE_VALUE) {
+        printf("snapshot failed %lu\n", GetLastError());
         return 1;
     }
-    int nMods = needed / sizeof(HMODULE);
-
-    for (int m = 0; m < nMods; m++) {
-        wchar_t path[MAX_PATH] = {0};
-        DWORD plen = GetModuleFileNameExW(hProc, mods[m], path, MAX_PATH);
-        if (!plen) continue;
-        wchar_t* bn = wcsrchr(path, L'\\');
+    MODULEENTRY32W me;
+    me.dwSize = sizeof(me);
+    int found = 0;
+    for (BOOL ok = Module32FirstW(snap, &me); ok; ok = Module32NextW(snap, &me)) {
+        wchar_t* bn = wcsrchr(me.szExePath, L'\\');
         if (!bn) continue;
         if (_wcsicmp(bn + 1, L"bypass_mingw.exe") != 0 &&
             _wcsicmp(bn + 1, L"bypass.exe") != 0) continue;
-
-        ULONGLONG base = (ULONGLONG)mods[m];
+        found = 1;
+        ULONGLONG base = (ULONGLONG)me.modBaseAddr;
+        wchar_t path[MAX_PATH];
+        wcscpy(path, me.szExePath);
         BYTE hdr[0x400];
         SIZE_T got = 0;
         ReadProcessMemory(hProc, (LPCVOID)base, hdr, sizeof(hdr), &got);
@@ -80,20 +80,20 @@ int wmain(int argc, wchar_t** argv) {
         if (secRaw + cmpLen > diskLen) cmpLen = diskLen - secRaw;
 
         BYTE* mem = (BYTE*)malloc(cmpLen ? cmpLen : 1);
-        ReadProcessMemory(hProc, (LPCVOID)(base + secRva), mem, cmpLen, &got);
+        ReadProcessMemory(hProc, (LPCVOID)(base + secRva + off), mem, cmpLen, &got);
 
         DWORD diff = 0;
         for (DWORD i = 0; i < cmpLen; i++) {
-            if (mem[i] != disk[secRaw + i]) diff++;
+            if (mem[i] != disk[secRaw + off + i]) diff++;
         }
-        printf("[dumpdiff] %ls %s RVA=0x%X raw=0x%X size=%lu mem!=disk bytes: %lu / %lu\n",
-               bn + 1, secName, secRva, secRaw, cmpLen, diff, cmpLen);
+        printf("[dumpdiff] %ls %s+0x%X RVA=0x%X raw=0x%X size=%lu mem!=disk bytes: %lu / %lu\n",
+               bn + 1, secName, off, secRva, secRaw, cmpLen, diff, cmpLen);
         if (diff) {
             printf("[dumpdiff] first divergent offsets:");
             int shown = 0;
             for (DWORD i = 0; i < cmpLen && shown < 6; i++) {
-                if (mem[i] != disk[secRaw + i]) {
-                    printf(" +0x%X(%02X->%02X)", i, disk[secRaw + i], mem[i]);
+                if (mem[i] != disk[secRaw + off + i]) {
+                    printf(" +0x%X(%02X->%02X)", i, disk[secRaw + off + i], mem[i]);
                     shown++;
                 }
             }
