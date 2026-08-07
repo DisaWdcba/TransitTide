@@ -172,7 +172,7 @@ CET 真正根治的是"伪造返回地址"那一类欺骗，而本方案从一�
 ## 复现
 
 ```
-msbuild StackSpoof.sln -p:Configuration=Release -p:Platform=x64
+msbuild TransitTide.sln -p:Configuration=Release -p:Platform=x64
 # 产物：x64/Release/sleep_duck.exe（检测器）、x64/Release/bypass.exe（harness）
 
 sleep_duck.exe -pid <pid>          # 检测器独立运行
