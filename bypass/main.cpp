@@ -587,18 +587,8 @@ static int RunExperiment(const wchar_t* mode) {
         MarkStageHex("[layout] shellcode:", (const void*)shellBase, 0x9D);
     }
 
-    wchar_t outFile[MAX_PATH];
-    WSPRINTF(outFile, MAX_PATH, L"%ls\\detector_%ls.txt", L".", mode);
-
-    // Spawn the detector first, then enter the sleep cycle: the detector's
-    // init+scan (~2-4s) lands inside the 8s encrypted sleep window.
-    HANDLE hDet = NULL;
-    if (g_detectorFound) {
-        hDet = SpawnDetector(GetCurrentProcessId(), outFile);
-    } else {
-        printf("[!] detector not available — skipping scan\n");
-    }
-
+    // Standalone PoC: no detector child process is spawned. Use -scan to
+    // explicitly run sleep_duck.exe against this process if needed.
     if (wcscmp(mode, L"idle") == 0) {
         SleepEx(ms, FALSE); // baseline: no payload call
         MarkStage("stage: idle sleep done");
@@ -609,20 +599,10 @@ static int RunExperiment(const wchar_t* mode) {
         MarkStage("stage: after shellcode");
     }
 
-    if (hDet) {
-        WaitForSingleObject(hDet, 30000);
-        DWORD detExit = 0;
-        GetExitCodeProcess(hDet, &detExit);
-        printf("[spawn] detector exited with code %lu\n", detExit);
-        CloseHandle(hDet);
-    }
-    MarkStage("stage: detector wait done");
-
     printf("[mode=%ls] payload calls=%lu lastResult=%lu (1 = decrypt verified) "
            "msgboxResult=%ld (0x%lX, -1 = failure, 1 = IDOK)\n",
            mode, g_shared.calls, g_shared.lastResult, (long)g_shared.reserved,
            (unsigned long)g_shared.reserved);
-    PrintDetectorOutput(outFile);
     return 0;
 }
 
