@@ -1,0 +1,20 @@
+ {
+  "pid" : 13516,
+  "output_dir" : "process_13516",
+  "dumped" : 
+  {
+   "total" : 1,
+   "dumped" : 1
+  },
+  "dumps" : [
+   {
+    "module" : "7ff6279a0000",
+    "module_size" : "19000",
+    "dump_file" : "7ff6279a0000.patchdeep.exe",
+    "tags_file" : "7ff6279a0000.patchdeep.exe.tag",
+    "dump_mode" : "REALIGNED",
+    "is_shellcode" : 0,
+    "status" : 1
+   }
+  ]
+ }

@@ -1,0 +1,20 @@
+ {
+  "pid" : 13276,
+  "output_dir" : "process_13276",
+  "dumped" : 
+  {
+   "total" : 1,
+   "dumped" : 1
+  },
+  "dumps" : [
+   {
+    "module" : "7ff636540000",
+    "module_size" : "19000",
+    "dump_file" : "7ff636540000.patchself.exe",
+    "tags_file" : "7ff636540000.patchself.exe.tag",
+    "dump_mode" : "REALIGNED",
+    "is_shellcode" : 0,
+    "status" : 1
+   }
+  ]
+ }

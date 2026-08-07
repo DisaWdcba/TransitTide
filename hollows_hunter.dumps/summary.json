@@ -1,0 +1,65 @@
+{
+ "scan_date_time" : "08/07/26 11:52:35",
+ "scan_timestamp" : 1786074755,
+ "scan_time_ms" : 515,
+ "scanned_count" : 1,
+ "failed_count" : 0,
+ "suspicious_count" : 1,
+ "suspicious" : [
+  {
+   "pid" : 12516,
+   "is_managed" : 0,
+   "name" : "bypass_mingw.exe",
+   "replaced" : 0,
+   "hdr_modified" : 0,
+   "implanted_pe" : 0,
+   "implanted_shc" : 1,
+   "unreachable_file" : 0,
+   "other" : 0
+  }
+ ]
+}
+{
+ "scan_date_time" : "08/07/26 11:54:41",
+ "scan_timestamp" : 1786074881,
+ "scan_time_ms" : 140,
+ "scanned_count" : 1,
+ "failed_count" : 0,
+ "suspicious_count" : 1,
+ "suspicious" : [
+  {
+   "pid" : 13276,
+   "is_managed" : 0,
+   "name" : "patchself.exe",
+   "replaced" : 0,
+   "hdr_modified" : 0,
+   "patched" : 1,
+   "implanted_pe" : 0,
+   "implanted_shc" : 0,
+   "unreachable_file" : 0,
+   "other" : 0
+  }
+ ]
+}
+{
+ "scan_date_time" : "08/07/26 12:06:12",
+ "scan_timestamp" : 1786075572,
+ "scan_time_ms" : 63,
+ "scanned_count" : 1,
+ "failed_count" : 0,
+ "suspicious_count" : 1,
+ "suspicious" : [
+  {
+   "pid" : 13516,
+   "is_managed" : 0,
+   "name" : "patchdeep.exe",
+   "replaced" : 0,
+   "hdr_modified" : 0,
+   "patched" : 1,
+   "implanted_pe" : 0,
+   "implanted_shc" : 0,
+   "unreachable_file" : 0,
+   "other" : 0
+  }
+ ]
+}

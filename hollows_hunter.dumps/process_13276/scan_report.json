@@ -1,0 +1,45 @@
+ {
+  "pid" : 13276,
+  "is_64_bit" : 1,
+  "is_managed" : 0,
+  "main_image_path" : "D:\\工具和代码\\Disa_Proj\\StackSpoof_Exp\\tools\\patchself.exe",
+  "used_reflection" : 0,
+  "scanner_version" : "0.4.1.1",
+  "scanned" : 
+  {
+   "total" : 5,
+   "skipped" : 0,
+   "modified" : 
+   {
+    "total" : 1,
+    "patched" : 1,
+    "iat_hooked" : 0,
+    "replaced" : 0,
+    "hdr_modified" : 0,
+    "implanted_pe" : 0,
+    "implanted_shc" : 0,
+    "unreachable_file" : 0,
+    "other" : 0
+   },
+   "errors" : 0
+  },
+  "scans" : [
+   {
+    "code_scan" : {
+     "status" : 1,
+     "module" : "7ff636540000",
+     "module_size" : "19000",
+     "module_file" : "D:\\工具和代码\\Disa_Proj\\StackSpoof_Exp\\tools\\patchself.exe",
+     "scanned_sections" : 1,
+     "patches" : 1,
+     "patches_list" : [
+      {
+       "rva" : "1490",
+       "size" : 4,
+       "is_hook" : 0
+      }
+     ]
+    }
+   }
+  ]
+ }

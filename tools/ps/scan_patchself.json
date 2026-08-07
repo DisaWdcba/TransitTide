@@ -1,0 +1,87 @@
+PID: 2320
+Output filter: no filter: dump everything (default)
+Dump mode: autodetect (default)
+[-] Could not set debug privilege
+[*] Using raw process!
+[*] Scanning: D:\工具和代码\Disa_Proj\StackSpoof_Exp\tools\patchself.exe
+[*] Scanning: C:\Windows\System32\ntdll.dll
+[*] Scanning: C:\Windows\System32\kernel32.dll
+[*] Scanning: C:\Windows\System32\KERNELBASE.dll
+[*] Scanning: C:\Windows\System32\msvcrt.dll
+Scanning workingset: 55 memory regions.
+[*] Workingset scanned in 78 ms.
+Scanning threads.
+[*] Threads scanned in 16 ms.
+[+] Report dumped to: process_2320
+[*] Dumped module to: D:\工具和代码\Disa_Proj\StackSpoof_Exp\tools\ps\\process_2320\7ff636540000.patchself.exe as REALIGNED
+[+] Dumped modified to: process_2320
+[+] Report dumped to: process_2320
+{
+ "scan_report" :
+ {
+  "pid" : 2320,
+  "is_64_bit" : 1,
+  "is_managed" : 0,
+  "main_image_path" : "D:\\工具和代码\\Disa_Proj\\StackSpoof_Exp\\tools\\patchself.exe",
+  "used_reflection" : 0,
+  "scanner_version" : "0.4.1.1",
+  "scanned" : 
+  {
+   "total" : 5,
+   "skipped" : 0,
+   "modified" : 
+   {
+    "total" : 1,
+    "patched" : 1,
+    "iat_hooked" : 0,
+    "replaced" : 0,
+    "hdr_modified" : 0,
+    "implanted_pe" : 0,
+    "implanted_shc" : 0,
+    "unreachable_file" : 0,
+    "other" : 0
+   },
+   "errors" : 0
+  },
+  "scans" : [
+   {
+    "code_scan" : {
+     "status" : 1,
+     "module" : "7ff636540000",
+     "module_size" : "19000",
+     "module_file" : "D:\\工具和代码\\Disa_Proj\\StackSpoof_Exp\\tools\\patchself.exe",
+     "scanned_sections" : 1,
+     "patches" : 1,
+     "patches_list" : [
+      {
+       "rva" : "1490",
+       "size" : 4,
+       "is_hook" : 0
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "dump_report" :
+ {
+  "pid" : 2320,
+  "output_dir" : "process_2320",
+  "dumped" : 
+  {
+   "total" : 1,
+   "dumped" : 1
+  },
+  "dumps" : [
+   {
+    "module" : "7ff636540000",
+    "module_size" : "19000",
+    "dump_file" : "7ff636540000.patchself.exe",
+    "tags_file" : "7ff636540000.patchself.exe.tag",
+    "dump_mode" : "REALIGNED",
+    "is_shellcode" : 0,
+    "status" : 1
+   }
+  ]
+ }
+}
