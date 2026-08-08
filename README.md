@@ -73,7 +73,7 @@ A/B 实验（MSVC + MinGW 双工具链 × 4 组合全矩阵）：
 
 新版本放弃 imm64 常量和 UI API，改成 view-local 指针表 + `GetStdHandle`/`WriteFile` 的纯 stdio 路径：所有函数地址和 `g_shared` 指针都塞进 `.pay` 末尾的表里，运行时重定位；执行时从表里取值再 call，看起来像 vtable 调用。`"OK\n"` marker 同时作为行为完成的自检标记。
 
-**RWX 映像节替代 VirtualProtect。** 最早的实现靠 `VirtualProtect` 在 RX 与 RWX 之间反复切换，后来按"零保护相关 API"的要求重做了：`.pay` 在**链接期**就声明成 RWX（GCC 是 `__asm__(".section .pay,\"awx\"")`；MSVC 的 `#pragma code_seg` 会强制代码节 RX，得 `editbin /SECTION:.pay,WE` 后处理）。这样 stomp 就是裸 `memcpy`，睡眠加密是原地 XOR——全程零 VirtualProtect、零 syscall。在 gdb 里给 `kernel32!VirtualProtect` 下断点跑完整实验：命中 0 次。导入表里残留的 VirtualProtect 是 CRT 的静态依赖，从未被调用。
+**RWX 映像节替代 VirtualProtect。** 最早的实现靠 `VirtualProtect` 在 RX 与 RWX 之间反复切换，这会引起一些主流 EDR 的告警——切换内存属性是高危检测面。改进思路：`.pay` 在**链接期**就声明成 RWX（GCC 是 `__asm__(".section .pay,\"awx\"")`；MSVC 的 `#pragma code_seg` 会强制代码节 RX，得 `editbin /SECTION:.pay,WE` 后处理）。这样 stomp 就是裸 `memcpy`，睡眠加密是原地 XOR——全程零 VirtualProtect、零 syscall。在 gdb 里给 `kernel32!VirtualProtect` 下断点跑完整实验：命中 0 次。导入表里残留的 VirtualProtect 是 CRT 的静态依赖，从未被调用。
 
 睡眠窗口内用 `VirtualQueryEx` 枚举全进程内存，实测下来**唯一的 RWX 区域就是 `.pay` 那一页**——从加载起就是 RWX，全程零翻转。这是"零 API 自修改"的必然形态，也是后面所有检测面讨论的锚点。
 
