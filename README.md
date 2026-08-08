@@ -163,7 +163,49 @@ Intel CET 的两个组件（SS 影子栈 / IBT 间接分支跟踪）经常被当
 
 CET 真正根治的是"伪造返回地址"那一类欺骗，而本方案从一开始就没伪造返回地址，欺骗全做在内容层（加密 + 窗口 + stomp）。攻防演变在这里看得最清楚：检测从"启发式猜"升级到"硬件真值"，攻击就从"骗过启发式"转移到"真值一致但内容可疑"；而内容可疑怎么判，又回到了页属性和节特征——也就是第一节 Duck Eye 就在做的那些检查。绕了一圈回来了。
 
-## 七、未来展望：接下来这场仗会在哪打
+## 七、对抗某前沿 EDR：告警 = 事件半边 × 状态半边
+
+推演归推演，真实世界总给点新东西。拿这套方案去碰了一台装了前沿国产 EDR 的机器，四份告警贴回来，逐步还原出它的检测管线，也顺带修正了我自己两个判断。这一节的每一条结论都有对应的实测记录。
+
+**四份告警还原出的管线。** 告警字段（`fltrid/fltrname/grand*/abnormalstackjson`）暴露了触发链路：敏感 DLL 的 `AcquireSection` 事件 → 触发全进程可执行区域枚举 → 区域起点 dump 出 `base_bin` + 滑动定位 `func_bin` → 判定"非 .text 可执行区域 + 内容可反汇编"。同一份 payload，四种形态的结果：
+
+| 版本 | Duck Eye | hollows_hunter | 该 EDR |
+|---|---|---|---|
+| 内容还原（island） | 0 | 0 | 抓（func_bin 抓到 .pay，protect=64 RWX，in_text_section=0） |
+| 双映射 | 0 | 0 | 抓（type=MEM_MAPPED，protect=32 RX，in_module=0） |
+| +形态伪装（零 imm64、vtable 风格） | 0 | 0 | 抓，**无降级** |
+| +无 UI 行为 | 0 | 0 | **零告警** |
+
+前三行我都在跟"状态"搏斗：内容还原、换内存形态、改指令风格——全部无效，因为判据锚定的是"非 .text 可执行区域的**存在性**"，跟内容长什么样无关。形态伪装那轮（lea/vtable 风格、消除全部 imm64）回归全过但告警一条不少，是整场实验最贵的无效投资。
+
+**拆开看告警的乘法结构。** 告警 = 事件半边 × 状态半边：
+
+- **状态半边**：进程里存在"可执行但非 .text 的区域"（私有 RX / MEM_MAPPED 视图 / 映像非代码节）——这是执行自定义代码的必然代价，**不可消**；
+- **事件半边**：敏感 DLL 加载（WINHTTP/USERENV）触发扫描——**可消**。
+
+关键发现是事件半边的来源：MessageBox 会激活 TSF（文本服务框架），搜狗输入法链（SogouTSF.ime）随之加载 WINHTTP/USERENV——敏感 DLL 的 AcquireSection 事件把扫描点着了，状态半边这才被"点名"。告警等级也验证了这个结构：medium 的"加载敏感镜像"有事件指向（AcquireSection×内存扫描组合），notice 的"Shellcode 异常行为"是纯状态判定——事件被拔掉后，剩下的只有 notice 级，最后连 notice 也没了。
+
+**第四层：换行为，不换内存。** 无 UI 化 payload：MessageBox 换成 `GetStdHandle(STD_OUTPUT_HANDLE)` + `WriteFile("OK\n")`——纯 kernel32、零窗口、零 TSF、零输入法链。UI 行为不是"附加特征"，它是把检测引擎激活的那只手。这层还顺手修了一个真 bug：hStdOut 曾存到 `[rsp+0x28]`，而 `sub rsp,0x28` 帧里那个槽正是返回地址位置——ret 直接跳进句柄值 0x730 崩溃（gdb 崩溃栈第一帧就是 0x730）。
+
+**规则库审计：零事件面 vs 事件全排除。** 拿 Elastic 770 条行为规则逐条对照三个模式。先盘事件面：`CreateFileMappingW`、`SleepEx`、`GetStdHandle`、`WriteFile`、`GetProcAddress` 全部**不在 ETW Threat-Intelligence provider 的 API 集里**——连事件都不会产生；唯一产生 api 事件的是 `MapViewOfFile×2`。37 条引用 MapViewOfFile 的规则逐条排除：
+
+| 排除依据 | 规则数 | 本方案为何豁免 |
+|---|---|---|
+| `parameters.protection == "RWX"` | 7 | 视图是 RX（`FILE_MAP_READ\|FILE_MAP_EXECUTE`） |
+| `behaviors == "cross-process"` | 5 | 同进程映射 |
+| `call_stack_final_user_module == "Unbacked"` | 6 | 调用方是 bypass.exe 模块 |
+| `size == 0`（整文件映射） | 2 | 传 0x2000 |
+| 特定宿主（msiexec/svchost/wscript…） | 8 | 都不是 |
+| syscall/行为标记 | 3 | 走 kernelbase 转发；`NtMapViewOfSection` 在排除表 |
+| ROP/回调/定时器栈特征 | 3 | 无 |
+
+有意思的边角：`CreateFileMappingW(PAGE_EXECUTE_READWRITE)` 创建的是 RWX **section**，但规则库对 CreateFileMapping **零引用**——只盯 MapViewOfFile 的视图保护。"RWX section + RX 视图"的组合恰好卡在盲区里。同理，`call_stack_contains_unbacked` 对双映射视图确实为真（执行帧解析不到映像），但 12 条用这个谓词的规则全部要求额外事件（进程创建/网络模块/lsass/conhost）——**unbacked 是真值，但没有规则聚合它**。我一度说过"规则会匹配"，错了：谓词为真和规则命中是两回事。
+
+两条隐身路径由此分明：island/full 是**零事件面**（映像节执行，没有任何被监控 API 事件），walkmap 是**事件全排除**（事件存在但每条规则的附加条件都被属性排除）。都不是原理级绕过——是规则集盲区，哪天 Elastic 加一条"unbacked 帧上执行 + 任意 I/O"的通用规则，walkmap 立刻重新命中。
+
+**误报的观察：为什么真实 EDR 要事件触发才扫描。** 双映射版本在 Duck Eye 下会爆几条"SleepMask Encryption Memory Detected"——全是误报：非映像区执行导致 StackWalk64 跨进程展开失败（x64 无 .pdata 时退化为"栈顶值当返回地址"），产生垃圾帧；Duck Eye 对每个回溯帧做滑动评分，连 kernel32 的转发 thunk（`jmp [rip+…]` + int3 填充）都判"加密"。MSVC 构建（有 PDB）同样误报——与符号无关，是"非映像区执行"的固有代价。我想过 `RtlInstallFunctionTableCallback` 给视图注册展开表，但动态函数表是进程级的，跨进程扫描根本读不到。**这个误报案例本身就是"事件×状态"设计的注脚**：纯状态扫描器的 FP 率高到没法用，真实 EDR 宁可等事件触发再查状态，也不做无差别普查。
+
+## 八、未来展望：接下来这场仗会在哪打
 
 这场实验做完，与其总结经验，不如顺着检测面守恒往前看几步——攻防双方下一步大概率会落在下面这几个方向上。
 
@@ -188,7 +230,7 @@ msbuild TransitTide.sln -p:Configuration=Release -p:Platform=x64
 sleep_duck.exe -pid <pid>          # 检测器独立运行
 bypass.exe                         # 实验组（island，预期零告警）
 bypass.exe -full                   # 控制组（预期 SleepMask Encryption Memory Detected）
-bypass.exe -walk / -walkpriv       # Elastic 风格栈分类（映像背书 vs 私有内存）
+bypass.exe -walk / -walkpriv / -walkmap   # Elastic 风格栈分类（映像背书 vs 私有内存 vs 双映射视图）
 bypass/clicker.ps1                 # 自动点击 MessageBox（SendMessage WM_COMMAND IDOK）
 ```
 
