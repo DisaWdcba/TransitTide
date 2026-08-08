@@ -74,15 +74,15 @@ A/B 实验（MSVC + MinGW 双工具链 × 4 组合全矩阵都跑过）：
 
 睡眠窗口内用 `VirtualQueryEx` 枚举全进程内存，实测下来**唯一的 RWX 区域就是 `.pay` 那一页**——从加载起就是 RWX，全程零翻转。这是"零 API 自修改"的必然形态，也是后面所有检测面讨论的锚点。
 
-**内容还原（默认 island 模式）——对抗内存区域特征型 EDR。** 针对"映像内非 .text 节 + RWX 页 + 明文内容反汇编出 shellcode"这类检测（实测告警：`abnormalstackjson` 直接抓到 `.pay` 页里的 shellcode 字节），睡眠时不再只加密前缀，而是把 `.pay` **整体还原成磁盘原始内容**（stomp 前保存的 StompTarget 镜像，30 个 call 的正常函数形态），唤醒后再重新 stomp 回去：
+**内容还原（默认 island 模式）——对抗内存区域特征型 EDR。** 针对"映像内非 .text 节 + RWX 页 + 明文内容反汇编出 shellcode"这类检测（实测告警直接抓到 `.pay` 页里的 shellcode 字节），睡眠时不再只加密前缀，而是把 `.pay` **整体还原成磁盘原始内容**（stomp 前保存的 StompTarget 镜像，30 个 call 的正常函数形态），唤醒后再重新 stomp 回去：
 
 ```
-睡眠前：memcpy(.pay, g_pristinePay)    ← 页内容 == 磁盘内容（func_bin/反汇编特征消失）
+睡眠前：memcpy(.pay, g_pristinePay)    ← 页内容 == 磁盘内容（反汇编特征消失）
 睡眠中：image-vs-disk 比对通过          ← hollows_hunter 那列的"理论必输"翻转为实测通过
 唤醒后：memcpy(.pay, g_shellcodeCopy)  ← 恢复 shellcode，继续执行
 ```
 
-验证（MSVC + MinGW 双工具链）：island 还原模式 Duck Eye 零告警、`restored pristine OK` 自检通过、载荷行为正常；full 控制组（保留 XOR 路径）依旧被检出。代价：RWX 页属性与节位置特征仍在（若 EDR 单独凭 `protect=64` 判定则无效），唤醒窗口（stomp→执行）内容与磁盘不一致（微秒级）。
+验证（MSVC + MinGW 双工具链）：island 还原模式 Duck Eye 零告警、`restored pristine OK` 自检通过、载荷行为正常；full 控制组（保留 XOR 路径）依旧被检出。代价：RWX 页属性与节位置特征仍在（若 EDR 单独凭页保护判定则无效），唤醒窗口（stomp→执行）内容与磁盘不一致（微秒级）。
 
 ## 四、升级威胁模型：Elastic 的 unbacked 语义
 
@@ -167,12 +167,12 @@ CET 真正根治的是"伪造返回地址"那一类欺骗，而本方案从一�
 
 推演归推演，真实世界总给点新东西。拿这套方案去碰了一台装了前沿国产 EDR 的机器，四份告警贴回来，逐步还原出它的检测管线，也顺带修正了我自己两个判断。这一节的每一条结论都有对应的实测记录。
 
-**四份告警还原出的管线。** 告警字段（`fltrid/fltrname/grand*/abnormalstackjson`）暴露了触发链路：敏感 DLL 的 `AcquireSection` 事件 → 触发全进程可执行区域枚举 → 区域起点 dump 出 `base_bin` + 滑动定位 `func_bin` → 判定"非 .text 可执行区域 + 内容可反汇编"。同一份 payload，四种形态的结果：
+**四份告警还原出的管线（细节从略）。** 从告警形态看，检测是事件触发型的：敏感模块加载事件 → 对目标进程可执行区域做枚举与内容采样 → 判据锚定在"非标准可执行区域的存在性 + 内容可反汇编"。同一份 payload，四种形态的结果：
 
 | 版本 | Duck Eye | hollows_hunter | 该 EDR |
 |---|---|---|---|
-| 内容还原（island） | 0 | 0 | 抓（func_bin 抓到 .pay，protect=64 RWX，in_text_section=0） |
-| 双映射 | 0 | 0 | 抓（type=MEM_MAPPED，protect=32 RX，in_module=0） |
+| 内容还原（island） | 0 | 0 | 抓（内容采样命中 .pay 区域） |
+| 双映射 | 0 | 0 | 抓（无模块背书的映射视图） |
 | +形态伪装（零 imm64、vtable 风格） | 0 | 0 | 抓，**无降级** |
 | +无 UI 行为 | 0 | 0 | **零告警** |
 
@@ -181,9 +181,9 @@ CET 真正根治的是"伪造返回地址"那一类欺骗，而本方案从一�
 **拆开看告警的乘法结构。** 告警 = 事件半边 × 状态半边：
 
 - **状态半边**：进程里存在"可执行但非 .text 的区域"（私有 RX / MEM_MAPPED 视图 / 映像非代码节）——这是执行自定义代码的必然代价，**不可消**；
-- **事件半边**：敏感 DLL 加载（WINHTTP/USERENV）触发扫描——**可消**。
+- **事件半边**：网络相关系统模块加载触发扫描——**可消**。
 
-关键发现是事件半边的来源：MessageBox 会激活 TSF（文本服务框架），搜狗输入法链（SogouTSF.ime）随之加载 WINHTTP/USERENV——敏感 DLL 的 AcquireSection 事件把扫描点着了，状态半边这才被"点名"。告警等级也验证了这个结构：medium 的"加载敏感镜像"有事件指向（AcquireSection×内存扫描组合），notice 的"Shellcode 异常行为"是纯状态判定——事件被拔掉后，剩下的只有 notice 级，最后连 notice 也没了。
+关键发现是事件半边的来源：UI 行为会经系统文本服务框架触发网络相关系统模块的加载，而这个加载事件把扫描点着了，状态半边这才被"点名"。告警等级也验证了这个结构：有事件指向的告警级别更高，纯状态判定的级别更低——事件被拔掉后，剩下的只有低级别判定，最后连它也消失了。
 
 **第四层：换行为，不换内存。** 无 UI 化 payload：MessageBox 换成 `GetStdHandle(STD_OUTPUT_HANDLE)` + `WriteFile("OK\n")`——纯 kernel32、零窗口、零 TSF、零输入法链。UI 行为不是"附加特征"，它是把检测引擎激活的那只手。这层还顺手修了一个真 bug：hStdOut 曾存到 `[rsp+0x28]`，而 `sub rsp,0x28` 帧里那个槽正是返回地址位置——ret 直接跳进句柄值 0x730 崩溃（gdb 崩溃栈第一帧就是 0x730）。
 
